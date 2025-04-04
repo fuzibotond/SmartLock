@@ -74,6 +74,5 @@ def get_logs(api_key: str = Header(None)):
 
 # ✅ Run FastAPI Server
 if __name__ == "__main__":
-    import uvicorn
 
     uvicorn.run(app, port=8000)
