@@ -1,5 +1,7 @@
+from typing import Annotated
+
 import uvicorn
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from pydantic import BaseModel
 import requests
 from datetime import datetime
@@ -32,8 +34,8 @@ def get_command():
 
 # ✅ API to Lock the Door
 @app.post("/api/lock")
-def lock_door(api_key: str = Header(None)):
-    authenticate(api_key)
+def lock_door(request: Request):
+    authenticate(request.headers.get('api_key'))
 
     try:
         response = requests.get(f"{ESP32_IP}/lock")
@@ -45,8 +47,8 @@ def lock_door(api_key: str = Header(None)):
 
 # ✅ API to Unlock the Door
 @app.post("/api/unlock")
-def unlock_door(api_key: str = Header(None)):
-    authenticate(api_key)
+def unlock_door(request: Request):
+    authenticate(request.headers.get('api_key'))
 
     try:
         response = requests.get(f"{ESP32_IP}/unlock")
@@ -58,10 +60,11 @@ def unlock_door(api_key: str = Header(None)):
 
 # ✅ API to Receive Status from ESP32
 @app.post("/api/esp32/status")
-def receive_status(status: StatusUpdate, api_key: str = Header(None)):
-    authenticate(api_key)
+def receive_status(status_update: StatusUpdate, request: Request):
+    print(status_update)
+    authenticate(request.headers.get('api_key'))
 
-    logs.append({"timestamp": datetime.now(), "device": status.device, "status": status.status})
+    logs.append({"timestamp": datetime.now(), "device": status_update.device, "status": status_update.status})
     return {"message": "Status received", "logs": logs}
 
 
