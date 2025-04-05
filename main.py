@@ -16,7 +16,7 @@ logs = []
 current_status = "Unknown"
 MQTT_COMMAND_TOPIC = "smartlock/commands"
 MQTT_STATUS_TOPIC = "smartlock/status"
-MQTT_BROKER = "broker.hivemq.com"  # or your own MQTT broker
+MQTT_BROKER = "test.mosquitto.org"  # or your own MQTT broker
 
 mqtt_client = MQTTClient("fastapi-server")
 
@@ -51,11 +51,21 @@ def on_message(client, topic, payload, qos, properties):
 
 mqtt_client.on_message = on_message
 
+import asyncio
+
 @app.on_event("startup")
 async def connect_mqtt():
-    mqtt_client.set_auth_credentials("","")  # optional username/password
-    await mqtt_client.connect(MQTT_BROKER)
-    mqtt_client.subscribe(MQTT_STATUS_TOPIC)
+    connected = False
+    retries = 0
+    while not connected and retries < 5:
+        try:
+            await mqtt_client.connect(MQTT_BROKER)
+            connected = True
+        except Exception as e:
+            print(f"❌ MQTT connection failed: {e}")
+            retries += 1
+            await asyncio.sleep(5)  # wait before retrying
+
 
 
 # ✅ API to Lock the Door
