@@ -61,11 +61,10 @@ def unlock_door(request: Request):
 # ✅ API to Receive Status from ESP32
 @app.post("/api/esp32/status")
 def receive_status(status_update: StatusUpdate, request: Request):
-    # print(status_update)
     authenticate(request.headers.get('api_key'))
 
-    # logs.append({"timestamp": datetime.now(), "device": status_update.device, "status": status_update.status})
-    return {"message": "Status received", "logs": status_update.status}
+    logs.append({"timestamp": datetime.now(), "device": status_update.device, "status": status_update.status})
+    return {"message": "Status received", "logs": logs}
 
 
 # ✅ API to Get Logs
