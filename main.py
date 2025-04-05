@@ -35,7 +35,7 @@ def get_command():
 # ✅ API to Lock the Door
 @app.post("/api/lock")
 def lock_door(request: Request):
-    authenticate(request.headers.get('api_key'))
+    authenticate(request.headers.get('Authorization'))
 
     try:
         response = requests.get(f"{ESP32_IP}/lock")
@@ -48,7 +48,7 @@ def lock_door(request: Request):
 # ✅ API to Unlock the Door
 @app.post("/api/unlock")
 def unlock_door(request: Request):
-    authenticate(request.headers.get('api_key'))
+    authenticate(request.headers.get('Authorization'))
 
     try:
         response = requests.get(f"{ESP32_IP}/unlock")
@@ -61,7 +61,7 @@ def unlock_door(request: Request):
 # ✅ API to Receive Status from ESP32
 @app.post("/api/esp32/status")
 def receive_status(status_update: StatusUpdate, request: Request):
-    authenticate(request.headers.get('api_key'))
+    authenticate(request.headers.get('Authorization'))
 
     logs.append({"timestamp": datetime.now(), "device": status_update.device, "status": status_update.status})
     return {"message": "Status received", "logs": logs}
