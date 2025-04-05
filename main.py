@@ -37,9 +37,9 @@ def get_command():
 def lock_door(request: Request):
     authenticate(request.headers.get('Authorization'))
     global current_command
-    current_command = "LOCK"
-    logs.append({"timestamp": datetime.now(), "action": "LOCK"})
-    return {"status": "Command set to LOCK"}
+    current_command = "CLOSE"
+    logs.append({"timestamp": datetime.now(), "action": "CLOSE"})
+    return {"status": "Command set to CLOSE"}
 
 
 # ✅ API to Unlock the Door
