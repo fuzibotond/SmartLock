@@ -70,9 +70,9 @@ def receive_status(status_update: StatusUpdate, request: Request):
 
 # ✅ API to Get Logs
 @app.get("/api/logs")
-def get_logs(api_key: str = Header(None)):
-    authenticate(api_key)
-    return {"logs": logs}
+def get_logs():
+
+    return {"logs": "csecs"}
 
 
 # ✅ Run FastAPI Server
