@@ -94,6 +94,14 @@ def get_status(request: Request):
     authenticate(request.headers.get("Authorization"))
     return {"status": current_status}
 
+# ✅ API to Receive Status from ESP32
+@app.post("/api/esp32/status")
+def receive_status(status_update: StatusUpdate, request: Request):
+    authenticate(request.headers.get('Authorization'))
+
+    logs.append({"timestamp": datetime.now(), "device": status_update.device, "status": status_update.status})
+    return {"message": "Status received", "logs": logs}
+
 
 # ✅ API to Get Logs
 @app.get("/api/logs")
