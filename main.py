@@ -9,6 +9,7 @@ from datetime import datetime
 app = FastAPI()
 
 ESP32_IP = "http://10.10.0.2"  # Change this to your ESP32's IP
+current_command = "LOCK"  # Default to locked
 API_KEY = "mysecureapikey"
 logs = []
 
@@ -28,34 +29,27 @@ def authenticate(api_key: str):
 # ✅ API for ESP32 to Get Commands
 @app.get("/api/esp32/command")
 def get_command():
-    # This should return either "LOCK" or "UNLOCK"
-    return "LOCK"  # Change to "UNLOCK" to test unlocking
+    return current_command
 
 
 # ✅ API to Lock the Door
 @app.post("/api/lock")
 def lock_door(request: Request):
     authenticate(request.headers.get('Authorization'))
-
-    try:
-        response = requests.get(f"{ESP32_IP}/lock")
-        logs.append({"timestamp": datetime.now(), "action": "LOCK"})
-        return {"status": "Door Locked", "esp_response": response.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    global current_command
+    current_command = "LOCK"
+    logs.append({"timestamp": datetime.now(), "action": "LOCK"})
+    return {"status": "Command set to LOCK"}
 
 
 # ✅ API to Unlock the Door
 @app.post("/api/unlock")
 def unlock_door(request: Request):
     authenticate(request.headers.get('Authorization'))
-
-    try:
-        response = requests.get(f"{ESP32_IP}/unlock")
-        logs.append({"timestamp": datetime.now(), "action": "UNLOCK"})
-        return {"status": "Door Unlocked", "esp_response": response.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    global current_command
+    current_command = "UNLOCK"
+    logs.append({"timestamp": datetime.now(), "action": "UNLOCK"})
+    return {"status": "Command set to UNLOCK"}
 
 
 # ✅ API to Receive Status from ESP32
@@ -70,8 +64,7 @@ def receive_status(status_update: StatusUpdate, request: Request):
 # ✅ API to Get Logs
 @app.get("/api/logs")
 def get_logs():
-
-    return {"logs": "csecs"}
+    return {"logs": logs}
 
 
 import os
