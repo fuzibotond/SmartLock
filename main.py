@@ -13,10 +13,9 @@ from pymongo.server_api import ServerApi
 
 app = FastAPI()
 
-uri = "mongodb+srv://fuziboti:1e2PLrjkdnbxOOLm@smartlock.pyl9zn8.mongodb.net/?appName=SmartLock"
 
 # Create a new client and connect to the server
-client = MongoClient(uri, server_api=ServerApi('1'))
+client = MongoClient(os.getenv("MONGO_URI"), server_api=ServerApi('1'))
 
 # Send a ping to confirm a successful connection
 try:
