@@ -10,6 +10,8 @@ from gmqtt import Client as MQTTClient
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import jwt
+import logging
+
 
 
 app = FastAPI()
@@ -74,24 +76,24 @@ def get_current_user(request: Request):
 
 # === MQTT Handling ===
 def on_message(client, topic, payload, qos, properties):
-    print(f"📩 Received message on topic: {topic}")
+    logger.info(f"📩 Received message on topic: {topic}")
     try:
         data = json.loads(payload.decode())
         device = data.get("device")
         status = data.get("status")
         key = data.get("api_key")
         if key != API_KEY:
-            print("❌ Invalid API key in MQTT message")
+            logger.error("❌ Invalid API key in MQTT message")
             return
         lock = locks_collection.find_one({"_id": device})
         if lock:
             locks_collection.update_one({"_id": device}, {"$set": {"status": status, "last_seen": datetime.utcnow()}})
             logs_collection.insert_one({"timestamp": datetime.utcnow(), "device_id": device, "status": status})
-            print(f"✅ Status update from {device}: {status}")
+            logger.info(f"✅ Status update from {device}: {status}")
         else:
-            print(f"⚠️ Unknown device status received: {device}")
+            logger.warning(f"⚠️ Unknown device status received: {device}")
     except Exception as e:
-        print(f"❌ Error in MQTT message: {e}")
+        logger.error(f"❌ Error in MQTT message: {e}")
 
 
 mqtt_client.on_message = on_message
@@ -107,7 +109,7 @@ async def connect_mqtt():
             mqtt_client.subscribe(MQTT_STATUS_TOPIC)
             connected = True
         except Exception as e:
-            print(f"❌ MQTT connection failed: {e}")
+            logger.error(f"❌ MQTT connection failed: {e}")
             retries += 1
             await asyncio.sleep(5)
 
@@ -227,6 +229,8 @@ def reassign_lock(device_id: str, new_owner: str, user: str = Depends(get_curren
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
     load_dotenv()
     username = quote_plus(os.getenv('MONGODB_URI_USER'))
     password = quote_plus(os.getenv('MONGODB_URI_PASSWORD'))
@@ -236,9 +240,9 @@ if __name__ == "__main__":
     # Send a ping to confirm a successful connection
     try:
         client.admin.command('ping')
-        print("Pinged your deployment. You successfully connected to MongoDB!")
+        logger.info("Pinged your deployment. You successfully connected to MongoDB!")
     except Exception as e:
-        print(e)
+        logger.error(e)
     db = client.smartlockdb
     users_collection = db.users
     locks_collection = db.locks
