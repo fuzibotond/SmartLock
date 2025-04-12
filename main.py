@@ -78,6 +78,10 @@ def on_message(client, topic, payload, qos, properties):
         data = json.loads(payload.decode())
         device = data.get("device")
         status = data.get("status")
+        key = data.get("api_key")
+        if key != API_KEY:
+            print("❌ Invalid API key in MQTT message")
+            return
         lock = locks_collection.find_one({"_id": device})
         if lock:
             locks_collection.update_one({"_id": device}, {"$set": {"status": status, "last_seen": datetime.utcnow()}})
