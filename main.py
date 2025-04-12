@@ -2,31 +2,17 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta
-
-import jwt
+from urllib.parse import quote_plus
+import pymongo
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Depends
 from gmqtt import Client as MQTTClient
 from pydantic import BaseModel
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
+from dotenv import load_dotenv
+import jwt
+
 
 app = FastAPI()
-
-
-# Create a new client and connect to the server
-client = MongoClient(os.getenv("MONGO_URI"), server_api=ServerApi('1'))
-
-# Send a ping to confirm a successful connection
-try:
-    client.admin.command('ping')
-    print("Pinged your deployment. You successfully connected to MongoDB!")
-except Exception as e:
-    print(e)
-db = client.smartlockdb
-users_collection = db.users
-locks_collection = db.locks
-logs_collection = db.logs
 
 # === Configuration ===
 API_KEY = "mysecureapikey"
@@ -48,6 +34,7 @@ class UserCredentials(BaseModel):
 class LockRegistration(BaseModel):
     device_id: str
     name: str
+
 
 # Status Model
 class StatusUpdate(BaseModel):
@@ -235,5 +222,21 @@ def reassign_lock(device_id: str, new_owner: str, user: str = Depends(get_curren
 
 
 if __name__ == "__main__":
+    load_dotenv()
+    username = quote_plus(os.getenv('MONGODB_URI_USER'))
+    password = quote_plus(os.getenv('MONGODB_URI_PASSWORD'))
+    cluster = 'smartlock'
+    uri = f'mongodb+srv://fuziboti:{password}@smartlock.pyl9zn8.mongodb.net/?appName=SmartLock'
+    client = pymongo.MongoClient(uri)
+    # Send a ping to confirm a successful connection
+    try:
+        client.admin.command('ping')
+        print("Pinged your deployment. You successfully connected to MongoDB!")
+    except Exception as e:
+        print(e)
+    db = client.smartlockdb
+    users_collection = db.users
+    locks_collection = db.locks
+    logs_collection = db.logs
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
