@@ -74,6 +74,7 @@ def get_current_user(request: Request):
 
 # === MQTT Handling ===
 def on_message(client, topic, payload, qos, properties):
+    print(f"📩 Received message on topic: {topic}")
     try:
         data = json.loads(payload.decode())
         device = data.get("device")
