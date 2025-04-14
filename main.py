@@ -45,7 +45,7 @@ locks_collection = db.locks
 logs_collection = db.logs
 
 # === MQTT ===
-mqtt_client = MQTTClient("smartlock-server")
+mqtt_client = MQTTClient(client_id="ESP32Client-24:0A:C4:00:01:10")
 
 
 async def start_mqtt():
