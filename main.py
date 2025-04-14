@@ -81,7 +81,11 @@ def start_mqtt_loop():
             await mqtt_client.connect(MQTT_BROKER)
             mqtt_client.subscribe(MQTT_STATUS_TOPIC)
             logger.info("✅ MQTT connected and subscribed to status topic")
-            await mqtt_client.listen()
+
+            # Keep the loop alive
+            while True:
+                await asyncio.sleep(1)
+
         except Exception as e:
             logger.error(f"❌ MQTT connection failed: {e}")
 
