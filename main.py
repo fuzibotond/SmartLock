@@ -1,20 +1,26 @@
-import asyncio
-import json
+# Flask version of your Smart Lock API
+
 import os
+import json
+import logging
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
-import pymongo
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Depends
-from gmqtt import Client as MQTTClient
-from pydantic import BaseModel
+
+from flask import Flask, request, jsonify
+from flask_pymongo import PyMongo
+from flask_jwt_extended import (
+    JWTManager, create_access_token, get_jwt_identity,
+    jwt_required
+)
 from dotenv import load_dotenv
+from gmqtt import Client as MQTTClient
+import asyncio
+import pymongo
 import jwt
-import logging
 
-
-
-app = FastAPI()
+# === App Setup ===
+app = Flask(__name__)
+load_dotenv()
 
 # === Configuration ===
 API_KEY = "mysecureapikey"
@@ -24,228 +30,182 @@ MQTT_COMMAND_TOPIC = "smartlock/commands"
 MQTT_STATUS_TOPIC = "smartlock/status"
 MQTT_BROKER = "test.mosquitto.org"
 
-mqtt_client = MQTTClient(MQTT_BROKER)
+app.config["JWT_SECRET_KEY"] = JWT_SECRET
+jwt_manager = JWTManager(app)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# === MongoDB Setup ===
+username = quote_plus(os.getenv('MONGODB_URI_USER'))
+password = quote_plus(os.getenv('MONGODB_URI_PASSWORD'))
+uri = f'mongodb+srv://{username}:{password}@smartlock.pyl9zn8.mongodb.net/?appName=SmartLock'
+client = pymongo.MongoClient(uri)
+db = client.smartlockdb
+users_collection = db.users
+locks_collection = db.locks
+logs_collection = db.logs
+
+# === MQTT ===
+mqtt_client = MQTTClient("smartlock-server")
 
 
-# === Models ===
-class UserCredentials(BaseModel):
-    username: str
-    password: str
-
-
-class LockRegistration(BaseModel):
-    device_id: str
-    name: str
-
-
-# Status Model
-class StatusUpdate(BaseModel):
-    device: str
-    status: str
-
-
-# ✅ Authenticate Requests
-def authenticate(api_key: str):
-    if api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
-
-
-# === Authentication Helpers ===
-def create_token(username: str):
-    payload = {"sub": username, "exp": datetime.utcnow() + timedelta(days=1)}
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
-def decode_token(token: str):
+async def start_mqtt():
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload["sub"]
-    except jwt:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        await mqtt_client.connect(MQTT_BROKER)
+        mqtt_client.subscribe(MQTT_STATUS_TOPIC)
+        logger.info("✅ MQTT connected and subscribed to status topic")
+    except Exception as e:
+        logger.error(f"❌ MQTT connection failed: {e}")
 
 
-def get_current_user(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authorization header missing or invalid")
-    token = auth_header.split(" ")[1]
-    return decode_token(token)
+mqtt_client.on_message = lambda client, topic, payload, qos, properties: handle_mqtt_message(topic, payload)
 
 
-# === MQTT Handling ===
-def on_message(client, topic, payload, qos, properties):
-    logger.info(f"📩 Received message on topic: {topic}")
+def handle_mqtt_message(topic, payload):
+    logger.info(f"MQTT Received on {topic}: {payload}")
     try:
         data = json.loads(payload.decode())
         device = data.get("device")
         status = data.get("status")
         key = data.get("api_key")
         if key != API_KEY:
-            logger.error("❌ Invalid API key in MQTT message")
+            logger.warning("Invalid API key in MQTT message")
             return
+
         lock = locks_collection.find_one({"_id": device})
         if lock:
             locks_collection.update_one({"_id": device}, {"$set": {"status": status, "last_seen": datetime.utcnow()}})
             logs_collection.insert_one({"timestamp": datetime.utcnow(), "device_id": device, "status": status})
-            logger.info(f"✅ Status update from {device}: {status}")
+            logger.info(f"Status updated for {device}: {status}")
         else:
-            logger.warning(f"⚠️ Unknown device status received: {device}")
+            logger.warning(f"Unknown device: {device}")
+
     except Exception as e:
-        logger.error(f"❌ Error in MQTT message: {e}")
+        logger.error(f"Error parsing MQTT message: {e}")
 
 
-mqtt_client.on_message = on_message
+# === Auth ===
+@app.route("/auth/signup", methods=["POST"])
+def signup():
+    data = request.get_json()
+    if users_collection.find_one({"username": data["username"]}):
+        return jsonify({"error": "Username already exists"}), 400
+    users_collection.insert_one({"username": data["username"], "password": data["password"], "is_admin": False})
+    return jsonify({"message": "User registered"})
 
 
-@app.on_event("startup")
-async def connect_mqtt():
-    connected = False
-    retries = 0
-    while not connected and retries < 5:
-        try:
-            await mqtt_client.connect(MQTT_BROKER)
-            mqtt_client.subscribe(MQTT_STATUS_TOPIC)
-            connected = True
-        except Exception as e:
-            logger.error(f"❌ MQTT connection failed: {e}")
-            retries += 1
-            await asyncio.sleep(5)
+@app.route("/auth/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    user = users_collection.find_one({"username": data["username"]})
+    if not user or user["password"] != data["password"]:
+        return jsonify({"error": "Invalid credentials"}), 401
+    token = create_access_token(identity=data["username"])
+    return jsonify({"token": token})
 
 
-## === API Endpoints ===
-@app.post("/auth/signup")
-def signup(credentials: UserCredentials):
-    if users_collection.find_one({"username": credentials.username}):
-        raise HTTPException(status_code=400, detail="Username already exists")
-    users_collection.insert_one({"username": credentials.username, "password": credentials.password, "is_admin": False})
-    return {"message": "User registered"}
-
-
-@app.post("/auth/login")
-def login(credentials: UserCredentials):
-    user = users_collection.find_one({"username": credentials.username})
-    if not user or user["password"] != credentials.password:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(credentials.username)
-    return {"token": token}
-
-
-@app.post("/locks/register")
-def register_lock(data: LockRegistration, user: str = Depends(get_current_user)):
-    if locks_collection.find_one({"_id": data.device_id}):
-        raise HTTPException(status_code=400, detail="Device already registered")
+# === Locks ===
+@app.route("/locks/register", methods=["POST"])
+@jwt_required()
+def register_lock():
+    data = request.get_json()
+    current_user = get_jwt_identity()
+    if locks_collection.find_one({"_id": data["device_id"]}):
+        return jsonify({"error": "Device already registered"}), 400
     locks_collection.insert_one({
-        "_id": data.device_id,
-        "name": data.name,
-        "owner": user,
+        "_id": data["device_id"],
+        "name": data["name"],
+        "owner": current_user,
         "status": "Unknown",
         "state": "Available",
         "last_seen": datetime.utcnow(),
         "issue": None
     })
-    return {"message": f"Lock {data.name} registered"}
+    return jsonify({"message": "Lock registered"})
 
 
-@app.get("/locks")
-def list_locks(user: str = Depends(get_current_user)):
-    return list(locks_collection.find({"owner": user}))
+@app.route("/locks", methods=["GET"])
+@jwt_required()
+def list_locks():
+    current_user = get_jwt_identity()
+    locks = list(locks_collection.find({"owner": current_user}))
+    return jsonify(locks)
 
 
-@app.get("/locks/{device_id}/status")
-def get_lock_status(device_id: str, user: str = Depends(get_current_user)):
-    lock = locks_collection.find_one({"_id": device_id, "owner": user})
+@app.route("/locks/<device_id>/status", methods=["GET"])
+@jwt_required()
+def get_lock_status(device_id):
+    current_user = get_jwt_identity()
+    lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
     if not lock:
-        raise HTTPException(status_code=404, detail="Lock not found or not yours")
+        return jsonify({"error": "Lock not found or not yours"}), 404
     delta = datetime.utcnow() - lock.get("last_seen", datetime.utcnow())
     state = "Available" if delta.total_seconds() < 35 else "Unavailable"
     locks_collection.update_one({"_id": device_id}, {"$set": {"state": state}})
-    return {
+    return jsonify({
         "status": lock["status"],
         "state": state,
         "issue": lock.get("issue")
-    }
+    })
 
 
-@app.post("/api/lock")
-def lock_door(request: Request):
-    user = get_current_user(request)
-    device_id = request.query_params.get("device_id")
-    lock = locks_collection.find_one({"_id": device_id, "owner": user})
+@app.route("/api/lock", methods=["POST"])
+@jwt_required()
+def lock_door():
+    current_user = get_jwt_identity()
+    device_id = request.args.get("device_id")
+    lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
     if not lock:
-        raise HTTPException(status_code=403, detail="Access denied to this lock")
+        return jsonify({"error": "Access denied to this lock"}), 403
     payload = {"command": "LOCK", "device": device_id, "api_key": API_KEY}
     mqtt_client.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
     logs_collection.insert_one(
-        {"timestamp": datetime.utcnow(), "action": "LOCK", "device_id": device_id, "user_id": user})
-    return {"status": f"LOCK command sent to {device_id}"}
+        {"timestamp": datetime.utcnow(), "action": "LOCK", "device_id": device_id, "user_id": current_user})
+    return jsonify({"status": f"LOCK command sent to {device_id}"})
 
 
-@app.post("/api/unlock")
-def unlock_door(request: Request):
-    user = get_current_user(request)
-    device_id = request.query_params.get("device_id")
-    lock = locks_collection.find_one({"_id": device_id, "owner": user})
+@app.route("/api/unlock", methods=["POST"])
+@jwt_required()
+def unlock_door():
+    current_user = get_jwt_identity()
+    device_id = request.args.get("device_id")
+    lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
     if not lock:
-        raise HTTPException(status_code=403, detail="Access denied to this lock")
+        return jsonify({"error": "Access denied to this lock"}), 403
     payload = {"command": "UNLOCK", "device": device_id, "api_key": API_KEY}
     mqtt_client.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
     logs_collection.insert_one(
-        {"timestamp": datetime.utcnow(), "action": "UNLOCK", "device_id": device_id, "user_id": user})
-    return {"status": f"UNLOCK command sent to {device_id}"}
+        {"timestamp": datetime.utcnow(), "action": "UNLOCK", "device_id": device_id, "user_id": current_user})
+    return jsonify({"status": f"UNLOCK command sent to {device_id}"})
 
 
-@app.post("/api/esp32/status")
-def receive_status(status_update: StatusUpdate):
-    if not locks_collection.find_one({"_id": status_update.device}):
-        raise HTTPException(status_code=404, detail="Device not registered")
-    locks_collection.update_one(
-        {"_id": status_update.device},
-        {"$set": {"status": status_update.status, "last_seen": datetime.utcnow()}}
-    )
-    logs_collection.insert_one(
-        {"timestamp": datetime.utcnow(), "device_id": status_update.device, "status": status_update.status})
-    return {"message": "Status received"}
+@app.route("/api/logs", methods=["GET"])
+@jwt_required()
+def get_logs():
+    current_user = get_jwt_identity()
+    logs = list(logs_collection.find({"user_id": current_user}))
+    return jsonify(logs)
 
 
-@app.get("/api/logs")
-def get_logs(user: str = Depends(get_current_user)):
-    return list(logs_collection.find({"user_id": user}))
-
-
-@app.put("/locks/{device_id}/reassign")
-def reassign_lock(device_id: str, new_owner: str, user: str = Depends(get_current_user)):
-    me = users_collection.find_one({"username": user})
-    if not me or not me.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+@app.route("/locks/<device_id>/reassign", methods=["PUT"])
+@jwt_required()
+def reassign_lock(device_id):
+    current_user = get_jwt_identity()
+    new_owner = request.args.get("new_owner")
+    user = users_collection.find_one({"username": current_user})
+    if not user.get("is_admin"):
+        return jsonify({"error": "Admin access required"}), 403
     new_user = users_collection.find_one({"username": new_owner})
     if not new_user:
-        raise HTTPException(status_code=404, detail="New owner not found")
+        return jsonify({"error": "New owner not found"}), 404
     result = locks_collection.update_one({"_id": device_id}, {"$set": {"owner": new_owner}})
     if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail="Lock not found")
-    return {"message": f"Lock {device_id} reassigned to {new_owner}"}
+        return jsonify({"error": "Lock not found"}), 404
+    return jsonify({"message": f"Lock {device_id} reassigned to {new_owner}"})
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-    load_dotenv()
-    username = quote_plus(os.getenv('MONGODB_URI_USER'))
-    password = quote_plus(os.getenv('MONGODB_URI_PASSWORD'))
-    cluster = 'smartlock'
-    uri = f'mongodb+srv://fuziboti:{password}@smartlock.pyl9zn8.mongodb.net/?appName=SmartLock'
-    client = pymongo.MongoClient(uri)
-    # Send a ping to confirm a successful connection
-    try:
-        client.admin.command('ping')
-        logger.info("Pinged your deployment. You successfully connected to MongoDB!")
-    except Exception as e:
-        logger.error(e)
-    db = client.smartlockdb
-    users_collection = db.users
-    locks_collection = db.locks
-    logs_collection = db.logs
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    asyncio.run(start_mqtt())
+    app.run(host="0.0.0.0", port=port)
