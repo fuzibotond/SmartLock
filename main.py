@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
+import threading
 
 from flask import Flask, request, jsonify
 from flask_jwt_extended import (
@@ -47,18 +48,7 @@ logs_collection = db.logs
 # === MQTT ===
 mqtt_client = MQTTClient(client_id="ESP32Client-24:0A:C4:00:01:10")
 
-
-async def start_mqtt():
-    try:
-        await mqtt_client.connect(MQTT_BROKER)
-        mqtt_client.subscribe(MQTT_STATUS_TOPIC)
-        logger.info("✅ MQTT connected and subscribed to status topic")
-    except Exception as e:
-        logger.error(f"❌ MQTT connection failed: {e}")
-
-
 mqtt_client.on_message = lambda client, topic, payload, qos, properties: handle_mqtt_message(topic, payload)
-
 
 def handle_mqtt_message(topic, payload):
     logger.info(f"MQTT Received on {topic}: {payload}")
@@ -82,6 +72,23 @@ def handle_mqtt_message(topic, payload):
     except Exception as e:
         logger.error(f"Error parsing MQTT message: {e}")
 
+def start_mqtt_loop():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def run():
+        try:
+            await mqtt_client.connect(MQTT_BROKER)
+            mqtt_client.subscribe(MQTT_STATUS_TOPIC)
+            logger.info("✅ MQTT connected and subscribed to status topic")
+            await mqtt_client.listen()
+        except Exception as e:
+            logger.error(f"❌ MQTT connection failed: {e}")
+
+    loop.run_until_complete(run())
+
+mqtt_thread = threading.Thread(target=start_mqtt_loop)
+mqtt_thread.start()
 
 # === Auth ===
 @app.route("/auth/signup", methods=["POST"])
@@ -92,7 +99,6 @@ def signup():
     users_collection.insert_one({"username": data["username"], "password": data["password"], "is_admin": False})
     return jsonify({"message": "User registered"})
 
-
 @app.route("/auth/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -101,7 +107,6 @@ def login():
         return jsonify({"error": "Invalid credentials"}), 401
     token = create_access_token(identity=data["username"])
     return jsonify({"token": token})
-
 
 # === Locks ===
 @app.route("/locks/register", methods=["POST"])
@@ -122,14 +127,12 @@ def register_lock():
     })
     return jsonify({"message": "Lock registered"})
 
-
 @app.route("/locks", methods=["GET"])
 @jwt_required()
 def list_locks():
     current_user = get_jwt_identity()
     locks = list(locks_collection.find({"owner": current_user}))
     return jsonify(locks)
-
 
 @app.route("/locks/<device_id>/status", methods=["GET"])
 @jwt_required()
@@ -147,7 +150,6 @@ def get_lock_status(device_id):
         "issue": lock.get("issue")
     })
 
-
 @app.route("/api/lock", methods=["POST"])
 @jwt_required()
 def lock_door():
@@ -161,7 +163,6 @@ def lock_door():
     logs_collection.insert_one(
         {"timestamp": datetime.utcnow(), "action": "LOCK", "device_id": device_id, "user_id": current_user})
     return jsonify({"status": f"LOCK command sent to {device_id}"})
-
 
 @app.route("/api/unlock", methods=["POST"])
 @jwt_required()
@@ -177,14 +178,12 @@ def unlock_door():
         {"timestamp": datetime.utcnow(), "action": "UNLOCK", "device_id": device_id, "user_id": current_user})
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
 
-
 @app.route("/api/logs", methods=["GET"])
 @jwt_required()
 def get_logs():
     current_user = get_jwt_identity()
     logs = list(logs_collection.find({"user_id": current_user}))
     return jsonify(logs)
-
 
 @app.route("/locks/<device_id>/reassign", methods=["PUT"])
 @jwt_required()
@@ -202,8 +201,6 @@ def reassign_lock(device_id):
         return jsonify({"error": "Lock not found"}), 404
     return jsonify({"message": f"Lock {device_id} reassigned to {new_owner}"})
 
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    asyncio.run(start_mqtt())
     app.run(host="0.0.0.0", port=port)
