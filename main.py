@@ -3,11 +3,10 @@
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.parse import quote_plus
 
 from flask import Flask, request, jsonify
-from flask_pymongo import PyMongo
 from flask_jwt_extended import (
     JWTManager, create_access_token, get_jwt_identity,
     jwt_required
@@ -16,7 +15,6 @@ from dotenv import load_dotenv
 from gmqtt import Client as MQTTClient
 import asyncio
 import pymongo
-import jwt
 
 # === App Setup ===
 app = Flask(__name__)
