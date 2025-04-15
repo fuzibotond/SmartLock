@@ -14,6 +14,7 @@ from flask_jwt_extended import (
 from flask_mqtt import Mqtt
 from dotenv import load_dotenv
 import pymongo
+from bson import ObjectId
 
 # === App Setup ===
 app = Flask(__name__)
@@ -50,6 +51,11 @@ db = client.smartlockdb
 users_collection = db.users
 locks_collection = db.locks
 logs_collection = db.logs
+
+def serialize_log(log):
+    log["_id"] = str(log["_id"])
+    log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
+    return log
 
 # === MQTT Callbacks ===
 @mqtt.on_connect()
@@ -169,12 +175,14 @@ def unlock_door():
         {"timestamp": datetime.utcnow(), "action": "UNLOCK", "device_id": device_id, "user_id": current_user})
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
 
+
 @app.route("/api/logs", methods=["GET"])
 @jwt_required()
 def get_logs():
     current_user = get_jwt_identity()
-    logs = list(logs_collection.find({"user_id": current_user}))
-    return jsonify(logs)
+    logs = list(logs_collection.find({"device_id": {"$exists": True}}))  # Or filter by user_id
+    serialized_logs = [serialize_log(log) for log in logs]
+    return jsonify(serialized_logs)
 
 @app.route("/locks/<device_id>/reassign", methods=["PUT"])
 @jwt_required()
