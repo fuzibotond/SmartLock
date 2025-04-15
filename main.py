@@ -21,7 +21,6 @@ app = Flask(__name__)
 load_dotenv()
 
 # === Configuration ===
-API_KEY = "mysecureapikey"
 JWT_SECRET = "supersecretjwtkey"
 JWT_ALGORITHM = "HS256"
 MQTT_COMMAND_TOPIC = "smartlock/commands"
@@ -38,8 +37,6 @@ app.config['MQTT_TLS_ENABLED'] = False
 
 jwt_manager = JWTManager(app)
 mqtt = Mqtt(app)
-app.config['MQTT_USERNAME'] = ''
-app.config['MQTT_PASSWORD'] = ''
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -81,11 +78,6 @@ def handle_mqtt_message(client, userdata, message):
         device = data.get("device")
         status = data.get("status")
         state = data.get("state")
-        key = data.get("api_key")
-
-        if key != API_KEY:
-            logger.warning("Invalid API key in MQTT message")
-            return
 
         lock = locks_collection.find_one({"_id": device})
         if lock:
@@ -171,7 +163,7 @@ def lock_door():
     if not is_device_online(lock):
         return jsonify({"error": "Device is offline, cannot send LOCK command"}), 503
 
-    payload = {"command": "LOCK", "device": device_id, "api_key": API_KEY}
+    payload = {"command": "LOCK", "device": device_id}
     mqtt.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
     logs_collection.insert_one({
         "timestamp": datetime.utcnow(),
@@ -195,7 +187,7 @@ def unlock_door():
     if not is_device_online(lock):
         return jsonify({"error": "Device is offline, cannot send UNLOCK command"}), 503
 
-    payload = {"command": "UNLOCK", "device": device_id, "api_key": API_KEY}
+    payload = {"command": "UNLOCK", "device": device_id}
     mqtt.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
     logs_collection.insert_one({
         "timestamp": datetime.utcnow(),
