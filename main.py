@@ -1,20 +1,18 @@
-# Flask version of your Smart Lock API
+# Flask version of your Smart Lock API using Flask-MQTT
 
 import os
 import json
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
-import threading
 
 from flask import Flask, request, jsonify
 from flask_jwt_extended import (
     JWTManager, create_access_token, get_jwt_identity,
     jwt_required
 )
+from flask_mqtt import Mqtt
 from dotenv import load_dotenv
-from gmqtt import Client as MQTTClient
-import asyncio
 import pymongo
 
 # === App Setup ===
@@ -29,8 +27,16 @@ MQTT_COMMAND_TOPIC = "smartlock/commands"
 MQTT_STATUS_TOPIC = "smartlock/status"
 MQTT_BROKER = "broker.hivemq.com"
 
-app.config["JWT_SECRET_KEY"] = JWT_SECRET
+app.config['JWT_SECRET_KEY'] = JWT_SECRET
+app.config['MQTT_BROKER_URL'] = MQTT_BROKER
+app.config['MQTT_BROKER_PORT'] = 1883
+app.config['MQTT_USERNAME'] = ''
+app.config['MQTT_PASSWORD'] = ''
+app.config['MQTT_KEEPALIVE'] = 60
+app.config['MQTT_TLS_ENABLED'] = False
+
 jwt_manager = JWTManager(app)
+mqtt = Mqtt(app)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -45,18 +51,21 @@ users_collection = db.users
 locks_collection = db.locks
 logs_collection = db.logs
 
-# === MQTT ===
-mqtt_client = MQTTClient(client_id="ESP32Client")
+# === MQTT Callbacks ===
+@mqtt.on_connect()
+def handle_connect(client, userdata, flags, rc):
+    mqtt.subscribe(MQTT_STATUS_TOPIC)
+    logger.info("✅ MQTT connected and subscribed to status topic")
 
-mqtt_client.on_message = lambda client, topic, payload, qos, properties: handle_mqtt_message(topic, payload)
-
-def handle_mqtt_message(topic, payload):
-    logger.info(f"MQTT Received on {topic}: {payload}")
+@mqtt.on_message()
+def handle_mqtt_message(client, userdata, message):
     try:
-        data = json.loads(payload.decode())
+        payload = message.payload.decode()
+        data = json.loads(payload)
         device = data.get("device")
         status = data.get("status")
         key = data.get("api_key")
+
         if key != API_KEY:
             logger.warning("Invalid API key in MQTT message")
             return
@@ -71,28 +80,6 @@ def handle_mqtt_message(topic, payload):
 
     except Exception as e:
         logger.error(f"Error parsing MQTT message: {e}")
-
-def start_mqtt_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    async def run():
-        try:
-            await mqtt_client.connect(MQTT_BROKER)
-            mqtt_client.subscribe(MQTT_STATUS_TOPIC)
-            logger.info("✅ MQTT connected and subscribed to status topic")
-            # This keeps the MQTT loop alive forever
-            while True:
-                await asyncio.sleep(1)
-        except Exception as e:
-            logger.error(f"❌ MQTT connection failed: {e}")
-
-    loop.run_until_complete(run())
-    loop.run_forever()
-
-
-mqtt_thread = threading.Thread(target=start_mqtt_loop)
-mqtt_thread.start()
 
 # === Auth ===
 @app.route("/auth/signup", methods=["POST"])
@@ -163,7 +150,7 @@ def lock_door():
     if not lock:
         return jsonify({"error": "Access denied to this lock"}), 403
     payload = {"command": "LOCK", "device": device_id, "api_key": API_KEY}
-    mqtt_client.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
+    mqtt.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
     logs_collection.insert_one(
         {"timestamp": datetime.utcnow(), "action": "LOCK", "device_id": device_id, "user_id": current_user})
     return jsonify({"status": f"LOCK command sent to {device_id}"})
@@ -177,7 +164,7 @@ def unlock_door():
     if not lock:
         return jsonify({"error": "Access denied to this lock"}), 403
     payload = {"command": "UNLOCK", "device": device_id, "api_key": API_KEY}
-    mqtt_client.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
+    mqtt.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
     logs_collection.insert_one(
         {"timestamp": datetime.utcnow(), "action": "UNLOCK", "device_id": device_id, "user_id": current_user})
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
