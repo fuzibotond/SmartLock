@@ -26,13 +26,13 @@ JWT_SECRET = "supersecretjwtkey"
 JWT_ALGORITHM = "HS256"
 MQTT_COMMAND_TOPIC = "smartlock/commands"
 MQTT_STATUS_TOPIC = "smartlock/status"
-MQTT_BROKER = "broker.hivemq.com"
+MQTT_BROKER = "broker.emqx.io"
 
 app.config['JWT_SECRET_KEY'] = JWT_SECRET
 app.config['MQTT_BROKER_URL'] = MQTT_BROKER
 app.config['MQTT_BROKER_PORT'] = 1883
-app.config['MQTT_USERNAME'] = 'esp32'
-app.config['MQTT_PASSWORD'] = 'pssword'
+app.config['MQTT_USERNAME'] = 'emqx'
+app.config['MQTT_PASSWORD'] = 'public'
 app.config['MQTT_KEEPALIVE'] = 60
 app.config['MQTT_TLS_ENABLED'] = False
 
