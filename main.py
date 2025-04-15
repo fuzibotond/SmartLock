@@ -27,7 +27,7 @@ JWT_SECRET = "supersecretjwtkey"
 JWT_ALGORITHM = "HS256"
 MQTT_COMMAND_TOPIC = "smartlock/commands"
 MQTT_STATUS_TOPIC = "smartlock/status"
-MQTT_BROKER = "test.mosquitto.org"
+MQTT_BROKER = "broker.hivemq.com"
 
 app.config["JWT_SECRET_KEY"] = JWT_SECRET
 jwt_manager = JWTManager(app)
@@ -46,7 +46,7 @@ locks_collection = db.locks
 logs_collection = db.logs
 
 # === MQTT ===
-mqtt_client = MQTTClient(client_id="ESP32Client-24:0A:C4:00:01:10")
+mqtt_client = MQTTClient(client_id="ESP32Client")
 
 mqtt_client.on_message = lambda client, topic, payload, qos, properties: handle_mqtt_message(topic, payload)
 
@@ -81,15 +81,15 @@ def start_mqtt_loop():
             await mqtt_client.connect(MQTT_BROKER)
             mqtt_client.subscribe(MQTT_STATUS_TOPIC)
             logger.info("✅ MQTT connected and subscribed to status topic")
-
-            # Keep the loop alive
+            # This keeps the MQTT loop alive forever
             while True:
                 await asyncio.sleep(1)
-
         except Exception as e:
             logger.error(f"❌ MQTT connection failed: {e}")
 
     loop.run_until_complete(run())
+    loop.run_forever()
+
 
 mqtt_thread = threading.Thread(target=start_mqtt_loop)
 mqtt_thread.start()
