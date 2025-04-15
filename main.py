@@ -153,8 +153,8 @@ def get_lock_status(device_id):
     state = "Available" if delta.total_seconds() < 35 else "Unavailable"
     locks_collection.update_one({"_id": device_id}, {"$set": {"state": state}})
     return jsonify({
-        "status": lock["status"],
-        "state": state,
+        "status": state,
+        "state": lock["status"],
         "issue": lock.get("issue")
     })
 
