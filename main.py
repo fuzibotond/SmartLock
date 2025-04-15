@@ -89,7 +89,7 @@ def handle_mqtt_message(client, userdata, message):
 
         lock = locks_collection.find_one({"_id": device})
         if lock:
-            locks_collection.update_one({"_id": device}, {"$set": {"status": status, "last_seen": datetime.utcnow()}})
+            locks_collection.update_one({"_id": device}, {"$set": {"status": status, "state": state, "last_seen": datetime.utcnow()}})
             logs_collection.insert_one({"timestamp": datetime.utcnow(), "device_id": device, "status": status})
             logger.info(f"Status updated for {device}: {status} - {state}")
         else:
@@ -129,7 +129,7 @@ def register_lock():
         "name": data["name"],
         "owner": current_user,
         "status": "Unknown",
-        "state": "Available",
+        "state": "Unknown",
         "last_seen": datetime.utcnow(),
         "issue": None
     })
