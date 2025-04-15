@@ -3,7 +3,7 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 from flask import Flask, request, jsonify
@@ -31,13 +31,15 @@ MQTT_BROKER = "broker.hivemq.com"
 app.config['JWT_SECRET_KEY'] = JWT_SECRET
 app.config['MQTT_BROKER_URL'] = MQTT_BROKER
 app.config['MQTT_BROKER_PORT'] = 1883
-app.config['MQTT_USERNAME'] = ''
-app.config['MQTT_PASSWORD'] = ''
+app.config['MQTT_USERNAME'] = 'esp32'
+app.config['MQTT_PASSWORD'] = 'pssword'
 app.config['MQTT_KEEPALIVE'] = 60
 app.config['MQTT_TLS_ENABLED'] = False
 
 jwt_manager = JWTManager(app)
 mqtt = Mqtt(app)
+app.config['MQTT_USERNAME'] = ''
+app.config['MQTT_PASSWORD'] = ''
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -57,6 +59,14 @@ def serialize_log(log):
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
     return log
 
+
+
+def is_device_online(lock):
+    last_seen = lock.get("last_seen", datetime.utcnow() - timedelta(days=1))
+    delta = datetime.utcnow() - last_seen
+    return delta.total_seconds() < 35  # or your heartbeat interval + grace
+
+
 # === MQTT Callbacks ===
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
@@ -70,6 +80,7 @@ def handle_mqtt_message(client, userdata, message):
         data = json.loads(payload)
         device = data.get("device")
         status = data.get("status")
+        state = data.get("state")
         key = data.get("api_key")
 
         if key != API_KEY:
@@ -80,7 +91,7 @@ def handle_mqtt_message(client, userdata, message):
         if lock:
             locks_collection.update_one({"_id": device}, {"$set": {"status": status, "last_seen": datetime.utcnow()}})
             logs_collection.insert_one({"timestamp": datetime.utcnow(), "device_id": device, "status": status})
-            logger.info(f"Status updated for {device}: {status}")
+            logger.info(f"Status updated for {device}: {status} - {state}")
         else:
             logger.warning(f"Unknown device: {device}")
 
@@ -153,13 +164,23 @@ def lock_door():
     current_user = get_jwt_identity()
     device_id = request.args.get("device_id")
     lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
+
     if not lock:
         return jsonify({"error": "Access denied to this lock"}), 403
+
+    if not is_device_online(lock):
+        return jsonify({"error": "Device is offline, cannot send LOCK command"}), 503
+
     payload = {"command": "LOCK", "device": device_id, "api_key": API_KEY}
     mqtt.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
-    logs_collection.insert_one(
-        {"timestamp": datetime.utcnow(), "action": "LOCK", "device_id": device_id, "user_id": current_user})
+    logs_collection.insert_one({
+        "timestamp": datetime.utcnow(),
+        "action": "LOCK",
+        "device_id": device_id,
+        "user_id": current_user
+    })
     return jsonify({"status": f"LOCK command sent to {device_id}"})
+
 
 @app.route("/api/unlock", methods=["POST"])
 @jwt_required()
@@ -167,13 +188,25 @@ def unlock_door():
     current_user = get_jwt_identity()
     device_id = request.args.get("device_id")
     lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
+
     if not lock:
         return jsonify({"error": "Access denied to this lock"}), 403
+
+    if not is_device_online(lock):
+        return jsonify({"error": "Device is offline, cannot send UNLOCK command"}), 503
+
     payload = {"command": "UNLOCK", "device": device_id, "api_key": API_KEY}
     mqtt.publish(MQTT_COMMAND_TOPIC, json.dumps(payload))
-    logs_collection.insert_one(
-        {"timestamp": datetime.utcnow(), "action": "UNLOCK", "device_id": device_id, "user_id": current_user})
+    logs_collection.insert_one({
+        "timestamp": datetime.utcnow(),
+        "action": "UNLOCK",
+        "device_id": device_id,
+        "user_id": current_user
+    })
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
+
+
+
 
 
 @app.route("/api/logs", methods=["GET"])
