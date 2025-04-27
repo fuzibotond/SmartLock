@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 from flask import Flask, request, jsonify
+from flask_apscheduler import APScheduler
 from flask_jwt_extended import (
     JWTManager, create_access_token, get_jwt_identity,
     jwt_required
@@ -16,9 +17,13 @@ from dotenv import load_dotenv
 import pymongo
 from bson import ObjectId
 
+
 # === App Setup ===
 app = Flask(__name__)
 load_dotenv()
+scheduler = APScheduler()
+scheduler.init_app(app)
+scheduler.start()
 
 # === Configuration ===
 JWT_SECRET = "supersecretjwtkey"
@@ -51,6 +56,7 @@ users_collection = db.users
 locks_collection = db.locks
 logs_collection = db.logs
 
+
 def serialize_log(log):
     log["_id"] = str(log["_id"])
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
@@ -70,6 +76,12 @@ def handle_connect(client, userdata, flags, rc):
     mqtt.subscribe(MQTT_STATUS_TOPIC)
     logger.info("✅ MQTT connected and subscribed to status topic")
 
+# === In-memory device tracking ===
+device_last_seen = {}
+device_last_state = {}
+
+OFFLINE_THRESHOLD_SECONDS = 10
+
 @mqtt.on_message()
 def handle_mqtt_message(client, userdata, message):
     try:
@@ -78,17 +90,81 @@ def handle_mqtt_message(client, userdata, message):
         device = data.get("device")
         status = data.get("status")
         state = data.get("state")
+        now = datetime.utcnow()
 
         lock = locks_collection.find_one({"_id": device})
         if lock:
-            locks_collection.update_one({"_id": device}, {"$set": {"status": status, "state": state, "last_seen": datetime.utcnow()}})
-            logs_collection.insert_one({"timestamp": datetime.utcnow(), "device_id": device, "status": status})
-            logger.info(f"Status updated for {device}: {status} - {state}")
+            last_seen = device_last_seen.get(device)
+            last_known_state = device_last_state.get(device, "Unknown")
+
+            if last_seen:
+                delta = (now - last_seen).total_seconds()
+                if delta > OFFLINE_THRESHOLD_SECONDS:
+                    # Device was "offline" for more than threshold
+                    logs_collection.insert_one({
+                        "timestamp": last_seen + timedelta(seconds=OFFLINE_THRESHOLD_SECONDS),
+                        "device_id": device,
+                        "status": "Offline",
+                        "state": last_known_state
+                    })
+                    logger.info(f"⚠️ OFFLINE logged for {device} (gap of {delta:.1f} sec)")
+
+            # Update lock's database entry
+            locks_collection.update_one(
+                {"_id": device},
+                {"$set": {"status": status, "state": state, "last_seen": now}}
+            )
+            logs_collection.insert_one({
+                "timestamp": now,
+                "device_id": device,
+                "status": status,
+                "state": state
+            })
+
+            # Update in-memory tracker
+            device_last_seen[device] = now
+            device_last_state[device] = state
+
+            logger.info(f"✅ Status updated for {device}: {status} - {state}")
+
         else:
             logger.warning(f"Unknown device: {device}")
 
     except Exception as e:
         logger.error(f"Error parsing MQTT message: {e}")
+
+
+def check_for_offline_devices():
+    now = datetime.utcnow()
+
+    for device_id, last_seen_time in device_last_seen.items():
+        delta = (now - last_seen_time).total_seconds()
+
+        if delta > OFFLINE_THRESHOLD_SECONDS:
+            last_log = logs_collection.find_one(
+                {"device_id": device_id},
+                sort=[("timestamp", pymongo.DESCENDING)]
+            )
+
+            if not last_log or last_log.get("status") != "Offline":
+                last_known_state = device_last_state.get(device_id, "Unknown")
+                logs_collection.insert_one({
+                    "timestamp": last_seen_time + timedelta(seconds=OFFLINE_THRESHOLD_SECONDS),
+                    "device_id": device_id,
+                    "status": "Offline",
+                    "state": last_known_state
+                })
+                logger.info(f"🚨 OFFLINE log created by checker for {device_id}")
+
+
+scheduler.add_job(
+    id='offline_checker',
+    func=check_for_offline_devices,
+    trigger='interval',
+    seconds=10,
+    replace_existing=True
+)
+
 
 # === Auth ===
 @app.route("/auth/signup", methods=["POST"])
@@ -134,21 +210,38 @@ def list_locks():
     locks = list(locks_collection.find({"owner": current_user}))
     return jsonify(locks)
 
+
 @app.route("/locks/<device_id>/status", methods=["GET"])
 @jwt_required()
 def get_lock_status(device_id):
     current_user = get_jwt_identity()
     lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
+
     if not lock:
         return jsonify({"error": "Lock not found or not yours"}), 404
-    delta = datetime.utcnow() - lock.get("last_seen", datetime.utcnow())
-    state = "Available" if delta.total_seconds() < 35 else "Unavailable"
-    locks_collection.update_one({"_id": device_id}, {"$set": {"state": state}})
+
+    now = datetime.utcnow()
+    last_seen = lock.get("last_seen", now - timedelta(days=1))
+    delta = (now - last_seen).total_seconds()
+
+    # If last seen more than threshold ago, mark as unavailable
+    is_online = delta < OFFLINE_THRESHOLD_SECONDS
+    connection_status = "Available" if is_online else "Unavailable"
+
+    # Optional: If you want to update in DB too
+    locks_collection.update_one(
+        {"_id": device_id},
+        {"$set": {"state": connection_status}}
+    )
+
     return jsonify({
-        "status": state,
-        "state": lock["status"],
+        "device_id": device_id,
+        "connection_status": connection_status,  # Available/Unavailable
+        "device_status": lock.get("status", "Unknown"),  # Locked/Unlocked/etc
+        "device_state": lock.get("state", "Unknown"),  # Optional, if you use another 'state' concept
         "issue": lock.get("issue")
     })
+
 
 @app.route("/api/lock", methods=["POST"])
 @jwt_required()
@@ -198,7 +291,13 @@ def unlock_door():
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
 
 
-
+def serialize_log(log):
+    log["_id"] = str(log["_id"])
+    log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
+    log["device_id"] = log.get("device_id", "Unknown")
+    log["status"] = log.get("status", log.get("action", "Unknown"))  # fallback to action
+    log["state"] = log.get("state", "Unknown")  # Always have state, even if missing
+    return log
 
 
 @app.route("/api/logs", methods=["GET"])
@@ -208,6 +307,7 @@ def get_logs():
     logs = list(logs_collection.find({"device_id": {"$exists": True}}))  # Or filter by user_id
     serialized_logs = [serialize_log(log) for log in logs]
     return jsonify(serialized_logs)
+
 
 @app.route("/locks/<device_id>/reassign", methods=["PUT"])
 @jwt_required()
