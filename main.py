@@ -1,5 +1,6 @@
 # Flask version of your Smart Lock API using Flask-MQTT
 
+from flask_cors import CORS
 import os
 import json
 import logging
@@ -18,6 +19,10 @@ import pymongo
 from bson import ObjectId
 
 
+# === Load environment variables ===
+uri = os.getenv("MONGODB_URI")
+client = pymongo.MongoClient(uri)
+
 # === App Setup ===
 app = Flask(__name__)
 load_dotenv()
@@ -25,50 +30,56 @@ scheduler = APScheduler()
 scheduler.init_app(app)
 scheduler.start()
 
-# === Configuration ===
-JWT_SECRET = "supersecretjwtkey"
-JWT_ALGORITHM = "HS256"
-MQTT_COMMAND_TOPIC = "smartlock/commands"
-MQTT_STATUS_TOPIC = "smartlock/status"
-MQTT_BROKER = "broker.emqx.io"
+# === Flask App Setup ===
+app = Flask(__name__)
+CORS(app)
 
-app.config['JWT_SECRET_KEY'] = JWT_SECRET
-app.config['MQTT_BROKER_URL'] = MQTT_BROKER
+# === Configuration ===
+app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "supersecretjwtkey")
+app.config['MQTT_BROKER_URL'] = "broker.emqx.io"
 app.config['MQTT_BROKER_PORT'] = 1883
 app.config['MQTT_USERNAME'] = 'emqx'
 app.config['MQTT_PASSWORD'] = 'public'
 app.config['MQTT_KEEPALIVE'] = 60
 app.config['MQTT_TLS_ENABLED'] = False
 
+# === JWT and MQTT Init ===
 jwt_manager = JWTManager(app)
 mqtt = Mqtt(app)
 
+# === Logger Setup ===
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # === MongoDB Setup ===
-username = quote_plus(os.getenv('MONGODB_URI_USER'))
-password = quote_plus(os.getenv('MONGODB_URI_PASSWORD'))
-uri = f'mongodb+srv://{username}:{password}@smartlock.pyl9zn8.mongodb.net/?appName=SmartLock'
-client = pymongo.MongoClient(uri)
-db = client.smartlockdb
-users_collection = db.users
-locks_collection = db.locks
-logs_collection = db.logs
+uri = os.getenv("MONGODB_URI")
 
+try:
+    client = pymongo.MongoClient(uri)
+    db = client.smartlockdb
+    users_collection = db.users
+    locks_collection = db.locks
+    logs_collection = db.logs
+except Exception as e:
+    logger.error("❌ Failed to connect to MongoDB:", e)
+
+
+# === MQTT Topics ===
+MQTT_COMMAND_TOPIC = "smartlock/commands"
+MQTT_STATUS_TOPIC = "smartlock/status"
+
+
+# === Utilities ===
 
 def serialize_log(log):
     log["_id"] = str(log["_id"])
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
     return log
 
-
-
 def is_device_online(lock):
     last_seen = lock.get("last_seen", datetime.utcnow() - timedelta(days=1))
     delta = datetime.utcnow() - last_seen
-    return delta.total_seconds() < 35  # or your heartbeat interval + grace
-
+    return delta.total_seconds() < 35
 
 # === MQTT Callbacks ===
 @mqtt.on_connect()
@@ -94,6 +105,7 @@ def handle_mqtt_message(client, userdata, message):
 
         lock = locks_collection.find_one({"_id": device})
         if lock:
+
             last_seen = device_last_seen.get(device)
             last_known_state = device_last_state.get(device, "Unknown")
 
@@ -129,10 +141,34 @@ def handle_mqtt_message(client, userdata, message):
 
         else:
             logger.warning(f"Unknown device: {device}")
-
     except Exception as e:
         logger.error(f"Error parsing MQTT message: {e}")
 
+# === Auth Routes ===
+@app.route("/auth/register", methods=["POST"])
+def register():
+    try:
+        data = request.get_json()
+        print("Incoming registration data:", data)  # ✅ Log request
+
+        if not all(k in data for k in ("email", "username", "password")):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        if users_collection.find_one({"username": data["username"]}):
+            return jsonify({"error": "Username already exists"}), 400
+
+        users_collection.insert_one({
+            "email": data["email"],
+            "username": data["username"],
+            "password": data["password"],
+            "is_admin": False
+        })
+
+        return jsonify({"message": "User created successfully"})
+    
+    except Exception as e:
+        print("❌ Error during registration:", str(e))  # ✅ Log the error
+        return jsonify({"error": "Internal server error"}), 500
 
 def check_for_offline_devices():
     now = datetime.utcnow()
@@ -175,6 +211,7 @@ def signup():
     users_collection.insert_one({"username": data["username"], "password": data["password"], "is_admin": False})
     return jsonify({"message": "User registered"})
 
+
 @app.route("/auth/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -184,7 +221,7 @@ def login():
     token = create_access_token(identity=data["username"])
     return jsonify({"token": token})
 
-# === Locks ===
+# === Lock Routes ===
 @app.route("/locks/register", methods=["POST"])
 @jwt_required()
 def register_lock():
@@ -249,10 +286,8 @@ def lock_door():
     current_user = get_jwt_identity()
     device_id = request.args.get("device_id")
     lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
-
     if not lock:
         return jsonify({"error": "Access denied to this lock"}), 403
-
     if not is_device_online(lock):
         return jsonify({"error": "Device is offline, cannot send LOCK command"}), 503
 
@@ -266,17 +301,14 @@ def lock_door():
     })
     return jsonify({"status": f"LOCK command sent to {device_id}"})
 
-
 @app.route("/api/unlock", methods=["POST"])
 @jwt_required()
 def unlock_door():
     current_user = get_jwt_identity()
     device_id = request.args.get("device_id")
     lock = locks_collection.find_one({"_id": device_id, "owner": current_user})
-
     if not lock:
         return jsonify({"error": "Access denied to this lock"}), 403
-
     if not is_device_online(lock):
         return jsonify({"error": "Device is offline, cannot send UNLOCK command"}), 503
 
@@ -290,7 +322,6 @@ def unlock_door():
     })
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
 
-
 def serialize_log(log):
     log["_id"] = str(log["_id"])
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
@@ -300,11 +331,12 @@ def serialize_log(log):
     return log
 
 
+
 @app.route("/api/logs", methods=["GET"])
 @jwt_required()
 def get_logs():
     current_user = get_jwt_identity()
-    logs = list(logs_collection.find({"device_id": {"$exists": True}}))  # Or filter by user_id
+    logs = list(logs_collection.find({"device_id": {"$exists": True}}))
     serialized_logs = [serialize_log(log) for log in logs]
     return jsonify(serialized_logs)
 
@@ -325,6 +357,15 @@ def reassign_lock(device_id):
         return jsonify({"error": "Lock not found"}), 404
     return jsonify({"message": f"Lock {device_id} reassigned to {new_owner}"})
 
+# === Run Flask App ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
+
+
+
+
+
+
+
+
