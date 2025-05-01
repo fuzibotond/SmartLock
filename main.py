@@ -19,10 +19,6 @@ import pymongo
 from bson import ObjectId
 
 
-# === Load environment variables ===
-uri = os.getenv("MONGODB_URI")
-client = pymongo.MongoClient(uri)
-
 # === App Setup ===
 app = Flask(__name__)
 load_dotenv()
@@ -30,29 +26,36 @@ scheduler = APScheduler()
 scheduler.init_app(app)
 scheduler.start()
 
-# === Flask App Setup ===
-app = Flask(__name__)
-CORS(app)
-
 # === Configuration ===
-app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "supersecretjwtkey")
-app.config['MQTT_BROKER_URL'] = "broker.emqx.io"
+JWT_SECRET = "supersecretjwtkey"
+JWT_ALGORITHM = "HS256"
+MQTT_COMMAND_TOPIC = "smartlock/commands"
+MQTT_STATUS_TOPIC = "smartlock/status"
+MQTT_BROKER = "broker.emqx.io"
+
+app.config['JWT_SECRET_KEY'] = JWT_SECRET
+app.config['MQTT_BROKER_URL'] = MQTT_BROKER
 app.config['MQTT_BROKER_PORT'] = 1883
 app.config['MQTT_USERNAME'] = 'emqx'
 app.config['MQTT_PASSWORD'] = 'public'
 app.config['MQTT_KEEPALIVE'] = 60
 app.config['MQTT_TLS_ENABLED'] = False
 
-# === JWT and MQTT Init ===
 jwt_manager = JWTManager(app)
 mqtt = Mqtt(app)
 
-# === Logger Setup ===
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # === MongoDB Setup ===
-uri = os.getenv("MONGODB_URI")
+username = quote_plus(os.getenv('MONGODB_URI_USER'))
+password = quote_plus(os.getenv('MONGODB_URI_PASSWORD'))
+uri = f'mongodb+srv://{username}:{password}@smartlock.pyl9zn8.mongodb.net/?appName=SmartLock'
+client = pymongo.MongoClient(uri)
+db = client.smartlockdb
+users_collection = db.users
+locks_collection = db.locks
+logs_collection = db.logs
 
 try:
     client = pymongo.MongoClient(uri)
@@ -74,6 +77,9 @@ MQTT_STATUS_TOPIC = "smartlock/status"
 def serialize_log(log):
     log["_id"] = str(log["_id"])
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
+    log["device_id"] = log.get("device_id", "Unknown")
+    log["status"] = log.get("status", log.get("action", "Unknown"))  # fallback to action
+    log["state"] = log.get("state", "Unknown")  # Always have state, even if missing
     return log
 
 def is_device_online(lock):
@@ -321,16 +327,6 @@ def unlock_door():
         "user_id": current_user
     })
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
-
-def serialize_log(log):
-    log["_id"] = str(log["_id"])
-    log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
-    log["device_id"] = log.get("device_id", "Unknown")
-    log["status"] = log.get("status", log.get("action", "Unknown"))  # fallback to action
-    log["state"] = log.get("state", "Unknown")  # Always have state, even if missing
-    return log
-
-
 
 @app.route("/api/logs", methods=["GET"])
 @jwt_required()
