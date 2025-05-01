@@ -150,32 +150,6 @@ def handle_mqtt_message(client, userdata, message):
     except Exception as e:
         logger.error(f"Error parsing MQTT message: {e}")
 
-# === Auth Routes ===
-@app.route("/auth/register", methods=["POST"])
-def register():
-    try:
-        data = request.get_json()
-        print("Incoming registration data:", data)  # ✅ Log request
-
-        if not all(k in data for k in ("email", "username", "password")):
-            return jsonify({"error": "Missing required fields"}), 400
-
-        if users_collection.find_one({"username": data["username"]}):
-            return jsonify({"error": "Username already exists"}), 400
-
-        users_collection.insert_one({
-            "email": data["email"],
-            "username": data["username"],
-            "password": data["password"],
-            "is_admin": False
-        })
-
-        return jsonify({"message": "User created successfully"})
-    
-    except Exception as e:
-        print("❌ Error during registration:", str(e))  # ✅ Log the error
-        return jsonify({"error": "Internal server error"}), 500
-
 def check_for_offline_devices():
     now = datetime.utcnow()
 
@@ -209,14 +183,31 @@ scheduler.add_job(
 
 
 # === Auth ===
-@app.route("/auth/signup", methods=["POST"])
-def signup():
-    data = request.get_json()
-    if users_collection.find_one({"username": data["username"]}):
-        return jsonify({"error": "Username already exists"}), 400
-    users_collection.insert_one({"username": data["username"], "password": data["password"], "is_admin": False})
-    return jsonify({"message": "User registered"})
 
+@app.route("/auth/register", methods=["POST"])
+def register():
+    try:
+        data = request.get_json()
+        print("Incoming registration data:", data)  # ✅ Log request
+
+        if not all(k in data for k in ("email", "username", "password")):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        if users_collection.find_one({"username": data["username"]}):
+            return jsonify({"error": "Username already exists"}), 400
+
+        users_collection.insert_one({
+            "email": data["email"],
+            "username": data["username"],
+            "password": data["password"],
+            "is_admin": False
+        })
+
+        return jsonify({"message": "User created successfully"})
+
+    except Exception as e:
+        print("❌ Error during registration:", str(e))  # ✅ Log the error
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/auth/login", methods=["POST"])
 def login():
