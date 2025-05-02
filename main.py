@@ -170,6 +170,10 @@ def check_for_offline_devices():
                     "status": "Offline",
                     "state": last_known_state
                 })
+                locks_collection.update_one(
+                    {"_id": device_id},
+                    {"$set": {"status": "Offline", "state": last_known_state, "last_seen": last_seen_time + timedelta(seconds=OFFLINE_THRESHOLD_SECONDS), "issue": "No power"}}
+                )
                 logger.info(f"🚨 OFFLINE log created by checker for {device_id}")
 
 
