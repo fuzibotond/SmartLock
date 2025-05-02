@@ -86,7 +86,7 @@ def serialize_log(log):
 def is_device_online(lock):
     last_seen = lock.get("last_seen", datetime.utcnow() - timedelta(days=1))
     delta = datetime.utcnow() - last_seen
-    return delta.total_seconds() < 35
+    return delta.total_seconds() < 5
 
 # === MQTT Callbacks ===
 @mqtt.on_connect()
