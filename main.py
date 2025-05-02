@@ -21,6 +21,7 @@ from bson import ObjectId
 
 # === App Setup ===
 app = Flask(__name__)
+CORS(app)
 load_dotenv()
 scheduler = APScheduler()
 scheduler.init_app(app)
