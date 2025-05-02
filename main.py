@@ -79,7 +79,7 @@ def serialize_log(log):
     log["_id"] = str(log["_id"])
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
     log["device_id"] = log.get("device_id", "Unknown")
-    log["status"] = log.get("status", log.get("action", "Unknown"))  # fallback to action
+    log["status"] = log.get("status",  "Unknown")  # fallback to action
     log["state"] = log.get("state", "Unknown")  # Always have state, even if missing
     return log
 
@@ -106,7 +106,6 @@ def handle_mqtt_message(client, userdata, message):
         payload = message.payload.decode()
         data = json.loads(payload)
         device = data.get("device")
-        status = data.get("status")
         state = data.get("state")
         now = datetime.utcnow()
 
@@ -131,12 +130,12 @@ def handle_mqtt_message(client, userdata, message):
             # Update lock's database entry
             locks_collection.update_one(
                 {"_id": device},
-                {"$set": {"status": status, "state": state, "last_seen": now}}
+                {"$set": {"status": "Online", "state": state, "last_seen": now}}
             )
             logs_collection.insert_one({
                 "timestamp": now,
                 "device_id": device,
-                "status": status,
+                "status": "Online",
                 "state": state
             })
 
@@ -144,7 +143,7 @@ def handle_mqtt_message(client, userdata, message):
             device_last_seen[device] = now
             device_last_state[device] = state
 
-            logger.info(f"✅ Status updated for {device}: {status} - {state}")
+            logger.info(f"✅ Status updated for {device}: Online - {state}")
 
         else:
             logger.warning(f"Unknown device: {device}")
