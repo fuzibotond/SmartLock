@@ -1,5 +1,3 @@
-# Flask version of your Smart Lock API using Flask-MQTT
-
 from flask_cors import CORS
 import os
 import json
@@ -16,8 +14,6 @@ from flask_jwt_extended import (
 from flask_mqtt import Mqtt
 from dotenv import load_dotenv
 import pymongo
-from bson import ObjectId
-
 
 # === App Setup ===
 app = Flask(__name__)
@@ -47,6 +43,7 @@ mqtt = Mqtt(app)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+OFFLINE_THRESHOLD_SECONDS = 10
 
 # === MongoDB Setup ===
 username = quote_plus(os.getenv('MONGODB_URI_USER'))
@@ -68,25 +65,22 @@ except Exception as e:
     logger.error("❌ Failed to connect to MongoDB:", e)
 
 
-# === MQTT Topics ===
-MQTT_COMMAND_TOPIC = "smartlock/commands"
-MQTT_STATUS_TOPIC = "smartlock/status"
-
-
 # === Utilities ===
 
 def serialize_log(log):
     log["_id"] = str(log["_id"])
     log["timestamp"] = log["timestamp"].isoformat() if "timestamp" in log else None
     log["device_id"] = log.get("device_id", "Unknown")
-    log["status"] = log.get("status",  "Unknown")  # fallback to action
+    log["status"] = log.get("status", "Unknown")  # fallback to action
     log["state"] = log.get("state", "Unknown")  # Always have state, even if missing
     return log
+
 
 def is_device_online(lock):
     last_seen = lock.get("last_seen", datetime.utcnow() - timedelta(days=1))
     delta = datetime.utcnow() - last_seen
     return delta.total_seconds() < 5
+
 
 # === MQTT Callbacks ===
 @mqtt.on_connect()
@@ -94,11 +88,12 @@ def handle_connect(client, userdata, flags, rc):
     mqtt.subscribe(MQTT_STATUS_TOPIC)
     logger.info("✅ MQTT connected and subscribed to status topic")
 
+
 # === In-memory device tracking ===
 device_last_seen = {}
 device_last_state = {}
 
-OFFLINE_THRESHOLD_SECONDS = 10
+
 
 @mqtt.on_message()
 def handle_mqtt_message(client, userdata, message):
@@ -150,6 +145,7 @@ def handle_mqtt_message(client, userdata, message):
     except Exception as e:
         logger.error(f"Error parsing MQTT message: {e}")
 
+
 def check_for_offline_devices():
     now = datetime.utcnow()
 
@@ -172,9 +168,11 @@ def check_for_offline_devices():
                 })
                 locks_collection.update_one(
                     {"_id": device_id},
-                    {"$set": {"status": "Offline", "state": last_known_state, "last_seen": last_seen_time + timedelta(seconds=OFFLINE_THRESHOLD_SECONDS), "issue": "No power"}}
+                    {"$set": {"status": "Offline", "state": last_known_state,
+                              "last_seen": last_seen_time + timedelta(seconds=OFFLINE_THRESHOLD_SECONDS),
+                              "issue": "No power"}}
                 )
-                logger.info(f"🚨 OFFLINE log created by checker for {device_id}")
+                logger.info(f"OFFLINE log created by checker for {device_id}")
 
 
 scheduler.add_job(
@@ -210,8 +208,9 @@ def register():
         return jsonify({"message": "User created successfully"})
 
     except Exception as e:
-        print("❌ Error during registration:", str(e))  # ✅ Log the error
+        print("Error during registration:", str(e))
         return jsonify({"error": "Internal server error"}), 500
+
 
 @app.route("/auth/login", methods=["POST"])
 def login():
@@ -221,6 +220,7 @@ def login():
         return jsonify({"error": "Invalid credentials"}), 401
     token = create_access_token(identity=data["username"])
     return jsonify({"token": token})
+
 
 # === Lock Routes ===
 @app.route("/locks/register", methods=["POST"])
@@ -240,6 +240,7 @@ def register_lock():
         "issue": None
     })
     return jsonify({"message": "Lock registered"})
+
 
 @app.route("/locks", methods=["GET"])
 @jwt_required()
@@ -302,6 +303,7 @@ def lock_door():
     })
     return jsonify({"status": f"LOCK command sent to {device_id}"})
 
+
 @app.route("/api/unlock", methods=["POST"])
 @jwt_required()
 def unlock_door():
@@ -322,6 +324,7 @@ def unlock_door():
         "user_id": current_user
     })
     return jsonify({"status": f"UNLOCK command sent to {device_id}"})
+
 
 @app.route("/api/logs", methods=["GET"])
 @jwt_required()
@@ -348,15 +351,8 @@ def reassign_lock(device_id):
         return jsonify({"error": "Lock not found"}), 404
     return jsonify({"message": f"Lock {device_id} reassigned to {new_owner}"})
 
+
 # === Run Flask App ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
-
-
-
-
-
-
-
-
