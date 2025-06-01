@@ -62,7 +62,7 @@ try:
     locks_collection = db.locks
     logs_collection = db.logs
 except Exception as e:
-    logger.error("❌ Failed to connect to MongoDB:", e)
+    logger.error("Failed to connect to MongoDB:", e)
 
 
 # === Utilities ===
@@ -86,7 +86,7 @@ def is_device_online(lock):
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
     mqtt.subscribe(MQTT_STATUS_TOPIC)
-    logger.info("✅ MQTT connected and subscribed to status topic")
+    logger.info("MQTT connected and subscribed to status topic")
 
 
 # === In-memory device tracking ===
@@ -120,7 +120,7 @@ def handle_mqtt_message(client, userdata, message):
                         "status": "Offline",
                         "state": last_known_state
                     })
-                    logger.info(f"⚠️ OFFLINE logged for {device} (gap of {delta:.1f} sec)")
+                    logger.info(f"OFFLINE logged for {device} (gap of {delta:.1f} sec)")
 
             # Update lock's database entry
             locks_collection.update_one(
@@ -138,7 +138,7 @@ def handle_mqtt_message(client, userdata, message):
             device_last_seen[device] = now
             device_last_state[device] = state
 
-            logger.info(f"✅ Status updated for {device}: Online - {state}")
+            logger.info(f"Status updated for {device}: Online - {state}")
 
         else:
             logger.warning(f"Unknown device: {device}")
@@ -190,7 +190,7 @@ scheduler.add_job(
 def register():
     try:
         data = request.get_json()
-        print("Incoming registration data:", data)  # ✅ Log request
+        print("Incoming registration data:", data)
 
         if not all(k in data for k in ("email", "username", "password")):
             return jsonify({"error": "Missing required fields"}), 400
